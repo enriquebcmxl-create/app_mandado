@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 # 1. Configuración de la página (Estilo iOS)
 st.set_page_config(page_title="Despensa Pro", page_icon="🛒", layout="centered")
 
-# 2. Estética personalizada y Truco de Teclado Numérico
+# 2. Estética y JS para Teclado Numérico (Forzar modo decimal)
 st.markdown("""
     <style>
     .stButton>button { border-radius: 10px; width: 100%; height: 3em; background-color: #007AFF; color: white; }
@@ -17,7 +17,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# JS para forzar teclado numérico en dispositivos móviles
+# Inyección de JS para que el iPhone saque el teclado de números
 components.html(
     """
     <script>
@@ -25,7 +25,6 @@ components.html(
     inputs.forEach(input => {
         if (input.getAttribute('aria-label') === "Precio") {
             input.setAttribute('inputmode', 'decimal');
-            input.setAttribute('pattern', '[0-9]*');
         }
     });
     </script>
@@ -33,101 +32,91 @@ components.html(
     height=0,
 )
 
-# 3. Conexión con Google Sheets
+# 3. Conexión y Inicialización de variables de sesión
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 4. Función para cargar datos con caché
+if "carrito" not in st.session_state:
+    st.session_state.carrito = []
+# Este contador 'limpiador' es el que borra los campos automáticamente
+if "limpiador" not in st.session_state:
+    st.session_state.limpiador = 0
+
+# 4. Funciones de Datos
 @st.cache_data(ttl=300)
 def cargar_datos_cache():
     try:
-        df = conn.read(worksheet="Historial", ttl=0)
-        return df
+        return conn.read(worksheet="Historial", ttl=0)
     except Exception:
         return pd.DataFrame(columns=["FECHA", "TOTAL", "ITEMS"])
 
-# 5. Función para guardar nueva compra
 def guardar_compra(total, items):
     try:
         df_historial = conn.read(worksheet="Historial", ttl=0)
     except Exception:
         df_historial = pd.DataFrame(columns=["FECHA", "TOTAL", "ITEMS"])
     
-    nueva_fila = {
+    nueva_fila = pd.DataFrame([{
         "FECHA": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "TOTAL": float(total),
         "ITEMS": json.dumps(items)
-    }
+    }])
     
-    nueva_fila_df = pd.DataFrame([nueva_fila])
-    
-    if df_historial.empty:
-        df_actualizado = nueva_fila_df
-    else:
-        df_actualizado = pd.concat([df_historial, nueva_fila_df], ignore_index=True)
-    
+    df_actualizado = pd.concat([df_historial, nueva_fila], ignore_index=True)
     conn.update(worksheet="Historial", data=df_actualizado)
     st.cache_data.clear()
 
-# 6. Lógica de Estado (Carrito)
-if "carrito" not in st.session_state:
-    st.session_state.carrito = []
-
-# 7. INTERFAZ DE USUARIO
+# 5. INTERFAZ DE USUARIO
 st.title("🛒 Despensa Pro")
 
 tab1, tab2 = st.tabs(["🛍️ Nueva Compra", "📊 Análisis"])
 
 with tab1:
     col1, col2 = st.columns(2)
+    
     with col1:
-        producto = st.text_input("Producto", placeholder="Ej. Leche")
+        # Usamos la llave dinámica para que se limpie solo
+        producto = st.text_input("Producto", placeholder="Ej. Leche", key=f"prod_{st.session_state.limpiador}")
     with col2:
-        # El label "Precio" es clave para que el script de arriba lo encuentre
-        precio_input = st.text_input("Precio", placeholder="0.00")
+        # Aquí el placeholder está vacío, por lo que no hay nada que borrar
+        precio_raw = st.text_input("Precio", placeholder="", key=f"pre_{st.session_state.limpiador}")
 
     if st.button("Agregar al Carrito"):
-        if producto and precio_input:
+        if producto and precio_raw:
             try:
-                # Reemplazamos coma por punto por si el teclado numérico usa comas
-                precio_limpio = precio_input.replace(',', '.')
-                precio = float(precio_limpio)
-                if precio > 0:
-                    st.session_state.carrito.append({"producto": producto, "precio": precio})
-                    st.toast(f"Agregado: {producto}")
-                    # No reiniciamos el producto aquí para que sea más rápido si compras varios iguales
-                else:
-                    st.error("El precio debe ser mayor a 0")
+                # Limpiamos el texto por si el teclado mete comas en lugar de puntos
+                precio = float(precio_raw.replace(',', '.'))
+                st.session_state.carrito.append({"producto": producto, "precio": precio})
+                st.toast(f"✅ {producto} agregado")
+                
+                # ¡MAGIA! Aumentamos el contador y los campos se vacían solos
+                st.session_state.limpiador += 1
+                st.rerun()
             except ValueError:
-                st.error("Ingresa un número válido")
+                st.error("⚠️ Escribe un número válido")
         else:
-            st.warning("Faltan datos")
+            st.warning("⚠️ Llena ambos cuadros")
 
     if st.session_state.carrito:
-        st.write("### Tu Carrito")
+        st.write("---")
         df_carrito = pd.DataFrame(st.session_state.carrito)
         st.table(df_carrito)
         
-        total_actual = df_carrito["precio"].sum()
-        st.metric("Total a Pagar", f"${total_actual:,.2f}")
+        total_pago = df_carrito["precio"].sum()
+        st.metric("Total Actual", f"${total_pago:,.2f}")
 
         if st.button("✅ Finalizar y Guardar en la Nube"):
-            with st.spinner("Sincronizando con la nube..."):
-                guardar_compra(total_actual, st.session_state.carrito)
+            with st.spinner("Subiendo datos..."):
+                guardar_compra(total_pago, st.session_state.carrito)
                 st.session_state.carrito = []
-                st.success("¡Listo! Guardado en la base de datos.")
+                st.success("¡Compra guardada con éxito!")
                 st.balloons()
                 st.rerun()
 
 with tab2:
-    df_historial = cargar_datos_cache()
-    if not df_historial.empty:
-        st.subheader("Tendencia de Gastos")
-        df_plot = df_historial.copy()
-        df_plot["FECHA"] = pd.to_datetime(df_plot["FECHA"])
-        chart_data = df_plot.set_index("FECHA")["TOTAL"]
-        st.line_chart(chart_data)
-        
-        if st.checkbox("Ver historial completo"):
-            st.write(df_historial)
+    df = cargar_datos_cache()
+    if not df.empty:
+        st.subheader("Tu Histórico")
+        df["FECHA"] = pd.to_datetime(df["FECHA"])
+        st.line_chart(df.set_index("FECHA")["TOTAL"])
     else:
         st.info("El historial aparecerá después de tu primera compra.")
