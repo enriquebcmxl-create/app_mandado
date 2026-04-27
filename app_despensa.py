@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Despensa Pro", page_icon="🛒", layout="centered")
 
-# URL verificada de tu documento
+# URL extraída de tu configuración TOML
 URL_HOJA = "https://docs.google.com/spreadsheets/d/18NivGQDAaAlkzU9WCi7iqO9aTlabs5FqdqdYN839qtM/edit?usp=sharing"
 
 # --- JS PARA TECLADO NUMÉRICO ---
@@ -37,33 +37,26 @@ if "limpiador" not in st.session_state:
 # --- FUNCIONES DE DATOS ---
 def cargar_datos_cache():
     try:
-        # Intentamos leer la hoja "Historial"
+        # Usamos la URL directa para evitar el error 404
         return conn.read(spreadsheet=URL_HOJA, worksheet="Historial", ttl=0)
     except Exception as e:
-        st.error(f"Error al leer: {e}")
         return pd.DataFrame(columns=["FECHA", "TOTAL", "ITEMS"])
 
 def guardar_compra(total, items):
     try:
-        # 1. Intentar obtener datos previos
         df_existente = cargar_datos_cache()
-        
-        # 2. Preparar nueva fila
         nueva_fila = pd.DataFrame([{
             "FECHA": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "TOTAL": float(total),
             "ITEMS": json.dumps(items)
         }])
-        
-        # 3. Combinar
         df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
-        
-        # 4. Actualizar en la nube
+        # Guardado con URL explícita
         conn.update(spreadsheet=URL_HOJA, worksheet="Historial", data=df_final)
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Error al guardar: {e}")
+        st.error(f"Error técnico: {e}")
         return False
 
 # --- INTERFAZ ---
@@ -73,9 +66,9 @@ t1, t2 = st.tabs(["🛍️ Nueva Compra", "📊 Historial"])
 with t1:
     c1, c2 = st.columns(2)
     with c1:
-        producto = st.text_input("Producto", placeholder="Ej. Leche", key=f"p_{st.session_state.limpiador}")
+        producto = st.text_input("Producto", key=f"p_{st.session_state.limpiador}")
     with c2:
-        precio_raw = st.text_input("Precio", placeholder="0.00", key=f"v_{st.session_state.limpiador}")
+        precio_raw = st.text_input("Precio", key=f"v_{st.session_state.limpiador}")
 
     if st.button("Agregar"):
         if producto and precio_raw:
@@ -85,7 +78,7 @@ with t1:
                 st.session_state.limpiador += 1
                 st.rerun()
             except:
-                st.error("Número inválido")
+                st.error("Precio no válido")
 
     if st.session_state.carrito:
         df_c = pd.DataFrame(st.session_state.carrito)
@@ -94,15 +87,12 @@ with t1:
         st.metric("Total", f"${total_p:,.2f}")
 
         if st.button("✅ Finalizar y Guardar"):
-            with st.spinner("Sincronizando..."):
-                if guardar_compra(total_p, st.session_state.carrito):
-                    st.session_state.carrito = []
-                    st.success("¡Compra guardada!")
-                    st.balloons()
-                    st.rerun()
+            if guardar_compra(total_p, st.session_state.carrito):
+                st.session_state.carrito = []
+                st.success("¡Guardado en la nube!")
+                st.rerun()
 
 with t2:
     df_h = cargar_datos_cache()
     if not df_h.empty:
-        st.line_chart(df_h.set_index("FECHA")["TOTAL"])
         st.write(df_h)
