@@ -5,28 +5,22 @@ from streamlit_gsheets import GSheetsConnection
 import json
 import streamlit.components.v1 as components
 
-# --- CONFIGURACIÓN ---
+# 1. Configuración de la página
 st.set_page_config(page_title="Despensa Pro", page_icon="🛒", layout="centered")
 
-# URL extraída de tu configuración TOML
+# URL de tu hoja (Verificada)
 URL_HOJA = "https://docs.google.com/spreadsheets/d/18NivGQDAaAlkzU9WCi7iqO9aTlabs5FqdqdYN839qtM/edit?usp=sharing"
 
-# --- JS PARA TECLADO NUMÉRICO ---
-components.html(
-    """
-    <script>
-    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-    inputs.forEach(input => {
-        if (input.getAttribute('aria-label') === "Precio") {
-            input.setAttribute('inputmode', 'decimal');
-        }
-    });
-    </script>
-    """,
-    height=0,
-)
+# 2. Estética y JS para Teclado
+st.markdown("""
+    <style>
+    .stButton>button { border-radius: 10px; width: 100%; height: 3em; background-color: #007AFF; color: white; }
+    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 15px; }
+    .stTextInput>div>div>input { border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- CONEXIÓN ---
+# 3. Conexión y Estado
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 if "carrito" not in st.session_state:
@@ -34,10 +28,9 @@ if "carrito" not in st.session_state:
 if "limpiador" not in st.session_state:
     st.session_state.limpiador = 0
 
-# --- FUNCIONES DE DATOS ---
+# 4. Funciones de Datos
 def cargar_datos_cache():
     try:
-        # Usamos la URL directa para evitar el error 404
         return conn.read(spreadsheet=URL_HOJA, worksheet="Historial", ttl=0)
     except Exception as e:
         return pd.DataFrame(columns=["FECHA", "TOTAL", "ITEMS"])
@@ -51,7 +44,6 @@ def guardar_compra(total, items):
             "ITEMS": json.dumps(items)
         }])
         df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
-        # Guardado con URL explícita
         conn.update(spreadsheet=URL_HOJA, worksheet="Historial", data=df_final)
         st.cache_data.clear()
         return True
@@ -59,15 +51,15 @@ def guardar_compra(total, items):
         st.error(f"Error técnico: {e}")
         return False
 
-# --- INTERFAZ ---
+# 5. Interfaz
 st.title("🛒 Despensa Pro")
 t1, t2 = st.tabs(["🛍️ Nueva Compra", "📊 Historial"])
 
 with t1:
-    c1, c2 = st.columns(2)
-    with c1:
+    col1, col2 = st.columns(2)
+    with col1:
         producto = st.text_input("Producto", key=f"p_{st.session_state.limpiador}")
-    with c2:
+    with col2:
         precio_raw = st.text_input("Precio", key=f"v_{st.session_state.limpiador}")
 
     if st.button("Agregar"):
@@ -89,7 +81,8 @@ with t1:
         if st.button("✅ Finalizar y Guardar"):
             if guardar_compra(total_p, st.session_state.carrito):
                 st.session_state.carrito = []
-                st.success("¡Guardado en la nube!")
+                st.success("¡Guardado!")
+                st.balloons()
                 st.rerun()
 
 with t2:
