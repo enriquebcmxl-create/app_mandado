@@ -5,13 +5,13 @@ from streamlit_gsheets import GSheetsConnection
 import json
 import streamlit.components.v1 as components
 
-# 1. Configuración e Interfaz
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Despensa Pro", page_icon="🛒", layout="centered")
 
-# URL de tu hoja (Verificada de tus capturas)
+# URL verificada de tu documento
 URL_HOJA = "https://docs.google.com/spreadsheets/d/18NivGQDAaAlkzU9WCi7iqO9aTlabs5FqdqdYN839qtM/edit?usp=sharing"
 
-# 2. JS para teclado numérico
+# --- JS PARA TECLADO NUMÉRICO ---
 components.html(
     """
     <script>
@@ -26,7 +26,7 @@ components.html(
     height=0,
 )
 
-# 3. Conexión
+# --- CONEXIÓN ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 if "carrito" not in st.session_state:
@@ -34,32 +34,39 @@ if "carrito" not in st.session_state:
 if "limpiador" not in st.session_state:
     st.session_state.limpiador = 0
 
-# 4. Funciones de Datos
+# --- FUNCIONES DE DATOS ---
 def cargar_datos_cache():
     try:
-        return conn.read(spreadsheet=URL_HOJA, worksheet="Historial")
-    except:
+        # Intentamos leer la hoja "Historial"
+        return conn.read(spreadsheet=URL_HOJA, worksheet="Historial", ttl=0)
+    except Exception as e:
+        st.error(f"Error al leer: {e}")
         return pd.DataFrame(columns=["FECHA", "TOTAL", "ITEMS"])
 
 def guardar_compra(total, items):
-    # Obtenemos datos actuales
-    df_actual = cargar_datos_cache()
-    
-    # Nueva entrada
-    nueva_fila = pd.DataFrame([{
-        "FECHA": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "TOTAL": float(total),
-        "ITEMS": json.dumps(items)
-    }])
-    
-    # Combinamos
-    df_final = pd.concat([df_actual, nueva_fila], ignore_index=True)
-    
-    # Guardado directo
-    conn.update(spreadsheet=URL_HOJA, worksheet="Historial", data=df_final)
-    st.cache_data.clear()
+    try:
+        # 1. Intentar obtener datos previos
+        df_existente = cargar_datos_cache()
+        
+        # 2. Preparar nueva fila
+        nueva_fila = pd.DataFrame([{
+            "FECHA": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "TOTAL": float(total),
+            "ITEMS": json.dumps(items)
+        }])
+        
+        # 3. Combinar
+        df_final = pd.concat([df_existente, nueva_fila], ignore_index=True)
+        
+        # 4. Actualizar en la nube
+        conn.update(spreadsheet=URL_HOJA, worksheet="Historial", data=df_final)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar: {e}")
+        return False
 
-# 5. Interfaz de Usuario
+# --- INTERFAZ ---
 st.title("🛒 Despensa Pro")
 t1, t2 = st.tabs(["🛍️ Nueva Compra", "📊 Historial"])
 
@@ -68,10 +75,9 @@ with t1:
     with c1:
         producto = st.text_input("Producto", placeholder="Ej. Leche", key=f"p_{st.session_state.limpiador}")
     with c2:
-        # El campo aparecerá vacío gracias a la key dinámica, sin el 0.00
         precio_raw = st.text_input("Precio", placeholder="0.00", key=f"v_{st.session_state.limpiador}")
 
-    if st.button("Agregar al Carrito"):
+    if st.button("Agregar"):
         if producto and precio_raw:
             try:
                 p = float(precio_raw.replace(',', '.'))
@@ -79,7 +85,7 @@ with t1:
                 st.session_state.limpiador += 1
                 st.rerun()
             except:
-                st.error("Precio inválido")
+                st.error("Número inválido")
 
     if st.session_state.carrito:
         df_c = pd.DataFrame(st.session_state.carrito)
@@ -87,12 +93,13 @@ with t1:
         total_p = df_c["precio"].sum()
         st.metric("Total", f"${total_p:,.2f}")
 
-        if st.button("✅ Guardar Compra"):
-            with st.spinner("Subiendo a la nube..."):
-                guardar_compra(total_p, st.session_state.carrito)
-                st.session_state.carrito = []
-                st.success("¡Guardado!")
-                st.rerun()
+        if st.button("✅ Finalizar y Guardar"):
+            with st.spinner("Sincronizando..."):
+                if guardar_compra(total_p, st.session_state.carrito):
+                    st.session_state.carrito = []
+                    st.success("¡Compra guardada!")
+                    st.balloons()
+                    st.rerun()
 
 with t2:
     df_h = cargar_datos_cache()
